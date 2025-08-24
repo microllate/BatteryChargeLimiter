@@ -344,7 +344,8 @@ object Utils {
     private const val MAX_VOLTAGE = 4400 // mV
 
     fun getVoltageFile(): String? {
-        return if (File(VOLTAGE_FILE).exists()) VOLTAGE_FILE else null
+        val file = File(VOLTAGE_FILE)
+        return if (file.exists()) file.absolutePath else null
     }
 
     fun getVoltageThreshold(context: Context): String? {
@@ -378,4 +379,3 @@ object Utils {
         return false
     }
 }
-
