@@ -79,12 +79,11 @@ class ForegroundService : Service() {
             Utils.stopService(this)
             return START_NOT_STICKY
         }
-        
+
         isRunning = true
         settings.edit().putBoolean(NOTIFICATION_LIVE, true).apply()
 
         // register a dynamically created receiver to handle battery events
-        // 关键改动：将 PowerConnectionReceiver 的逻辑合并到这里
         if (batteryReceiver == null) {
             batteryReceiver = BatteryReceiver(this)
         }
@@ -98,16 +97,13 @@ class ForegroundService : Service() {
         Log.d("ForegroundService", "BatteryReceiver registered inside service.")
 
         // Check current charging state on start and update UI
-        // 启动时检查当前充电状态并更新UI
         val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        if (Utils.isCharging(batteryIntent)) {
+        if (batteryIntent != null && Utils.isCharging(batteryIntent)) {
             // If charging, handle as a charging event immediately
-            // 如果正在充电，立即按充电事件处理
             batteryReceiver?.onReceive(this, batteryIntent)
             Log.d("ForegroundService", "Device is charging on service start, handling charging event.")
         } else {
             // If not charging, show a "waiting" notification
-            // 如果未充电，显示“等待”通知
             setNotificationIcon(NOTIF_MAINTAIN)
             setNotificationTitle(getString(R.string.notification_wait_title))
             setNotificationContentText(getString(R.string.notification_wait_content))
@@ -177,7 +173,7 @@ class ForegroundService : Service() {
         settings.edit().putBoolean(NOTIFICATION_LIVE, false).apply()
         // unregister the battery event receiver
         if (batteryReceiver != null) {
-            unregisterReceiver(batteryReceiver)
+            unregisterReceiver(batteryReceiver!!)
             // make the BatteryReceiver and dependencies ready for garbage-collection
             batteryReceiver!!.detach(this)
             // clear the reference to the battery receiver for GC
