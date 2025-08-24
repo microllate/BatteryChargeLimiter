@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.RingtoneManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.ActivityCompat
@@ -23,7 +24,8 @@ import io.github.muntashirakon.bcl.activities.MainActivity
 import io.github.muntashirakon.bcl.receivers.BatteryReceiver
 import io.github.muntashirakon.bcl.receivers.ControlBatteryChargeReceiver
 import io.github.muntashirakon.bcl.settings.PrefsFragment
-
+import android.content.SharedPreferences
+import android.util.Log
 
 /**
  * Created by harsha on 30/1/17.
@@ -31,97 +33,127 @@ import io.github.muntashirakon.bcl.settings.PrefsFragment
  * This is a Service that shows the notification about the current charging state
  * and supplies the context to the BatteryReceiver it is registering.
  *
- * 24/4/17 milux: Changed to make "restart" more efficient by avoiding the need to stop the service
+ * This version is modified to reliably handle power events without external receivers.
  */
 class ForegroundService : Service() {
-
-    private val settings by lazy(LazyThreadSafetyMode.NONE) { this.getSharedPreferences(SETTINGS, 0) }
-    private val prefs by lazy(LazyThreadSafetyMode.NONE) { Utils.getPrefs(this) }
-    private val notificationManager by lazy(LazyThreadSafetyMode.NONE) {
-        NotificationManagerCompat.from(this)
-
-    }
-    private val mNotifyBuilder by lazy(LazyThreadSafetyMode.NONE) {
-        NotificationCompat.Builder(this, Constants.FOREGROUND_SERVICE_NOTIFICATION_CHANNEL_ID)
-    }
-    private var notifyID = 1
+    private lateinit var prefs: SharedPreferences
+    private lateinit var settings: SharedPreferences
+    private lateinit var notificationManager: NotificationManagerCompat
+    private lateinit var mNotifyBuilder: NotificationCompat.Builder
     private var autoResetActive = false
     private var batteryReceiver: BatteryReceiver? = null
-
-    /**
-     * Enables the automatic reset on service shutdown
-     */
-    fun enableAutoReset() {
-        autoResetActive = true
-    }
+    private var notifyID: Int = 1337
 
     override fun onCreate() {
-        isRunning = true
-
-        settings.edit().putBoolean(NOTIFICATION_LIVE, true).apply()
+        super.onCreate()
+        prefs = Utils.getPrefs(this)
+        settings = Utils.getSettings(this)
+        notificationManager = NotificationManagerCompat.from(this)
 
         val channel = NotificationChannelCompat.Builder(
             Constants.FOREGROUND_SERVICE_NOTIFICATION_CHANNEL_ID,
-            NotificationManagerCompat.IMPORTANCE_LOW
+            NotificationManagerCompat.IMPORTANCE_DEFAULT
         )
-            .setName("Charge Limit Status")
+            .setName(getString(R.string.notification_channel_name))
+            .setDescription(getString(R.string.notification_channel_desc))
+            .setLightsEnabled(true)
+            .setVibrationEnabled(false)
             .build()
         notificationManager.createNotificationChannel(channel)
 
-        val notification = mNotifyBuilder
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setCategory(NotificationCompat.CATEGORY_SYSTEM)
-            .setContentTitle(getString(R.string.please_wait))
-            .setContentInfo(getString(R.string.please_wait))
-            .setSmallIcon(R.drawable.ic_notif_charge)
-            .setColor(ContextCompat.getColor(this, R.color.colorPrimary))
-            .build()
-        startForeground(notifyID, notification)
-
-        batteryReceiver = BatteryReceiver(this@ForegroundService)
-        registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        mNotifyBuilder = NotificationCompat.Builder(this, Constants.FOREGROUND_SERVICE_NOTIFICATION_CHANNEL_ID)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        //ignoreAutoReset = false
-        //return super.onStartCommand(intent, flags, startId)
-        ignoreAutoReset = false
-        return START_STICKY 
+        // We have to check if we can post notifications first
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            // Permission not granted, stop the service immediately.
+            Log.d("ForegroundService", "Notification permission not granted, stopping service.")
+            Utils.stopService(this)
+            return START_NOT_STICKY
+        }
+        
+        isRunning = true
+        settings.edit().putBoolean(NOTIFICATION_LIVE, true).apply()
+
+        // register a dynamically created receiver to handle battery events
+        // 关键改动：将 PowerConnectionReceiver 的逻辑合并到这里
+        if (batteryReceiver == null) {
+            batteryReceiver = BatteryReceiver(this)
+        }
+        
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+        }
+        registerReceiver(batteryReceiver, filter)
+        Log.d("ForegroundService", "BatteryReceiver registered inside service.")
+
+        // Check current charging state on start and update UI
+        // 启动时检查当前充电状态并更新UI
+        val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        if (Utils.isCharging(batteryIntent)) {
+            // If charging, handle as a charging event immediately
+            // 如果正在充电，立即按充电事件处理
+            batteryReceiver?.onReceive(this, batteryIntent)
+            Log.d("ForegroundService", "Device is charging on service start, handling charging event.")
+        } else {
+            // If not charging, show a "waiting" notification
+            // 如果未充电，显示“等待”通知
+            setNotificationIcon(NOTIF_MAINTAIN)
+            setNotificationTitle(getString(R.string.notification_wait_title))
+            setNotificationContentText(getString(R.string.notification_wait_content))
+            setNotificationActionText(getString(R.string.disable_temporarily)) // Keep this action for manual disable
+            updateNotification()
+            Log.d("ForegroundService", "Device not charging on service start, waiting for power connection.")
+        }
+
+        startForeground(notifyID, mNotifyBuilder.build())
+        
+        return START_STICKY
     }
 
-    fun setNotificationActionText(actionText: String) {
-        mNotifyBuilder.clearActions()
-        val flagImmutable: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
-        val pendingIntentOpenApp = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), flagImmutable)
-        val pendingIntentDisable = PendingIntent.getBroadcast(
+    fun setNotificationIcon(iconName: String) {
+        val resId = resources.getIdentifier(iconName, "drawable", packageName)
+        mNotifyBuilder.setSmallIcon(resId)
+    }
+
+    fun setNotificationTitle(text: String) {
+        mNotifyBuilder.setContentTitle(text)
+    }
+
+    fun setNotificationContentText(text: String) {
+        mNotifyBuilder.setContentText(text)
+    }
+
+    fun setNotificationActionText(text: String) {
+        val disableIntent = Intent(this, ControlBatteryChargeReceiver::class.java).setAction(INTENT_DISABLE_ACTION)
+        val disablePendingIntent = PendingIntent.getBroadcast(
             this,
             0,
-            Intent(this, ControlBatteryChargeReceiver::class.java).setAction(INTENT_DISABLE_ACTION),
-            PendingIntent.FLAG_UPDATE_CURRENT or flagImmutable
+            disableIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
         )
-        mNotifyBuilder.addAction(0, actionText, pendingIntentDisable)
-            .addAction(0, getString(R.string.open_app), pendingIntentOpenApp)
-    }
-
-    fun setNotificationTitle(title: String) {
-        mNotifyBuilder.setContentTitle(title)
-    }
-
-    fun setNotificationContentText(contentText: String) {
-        mNotifyBuilder.setContentText(contentText)
-    }
-
-    fun setNotificationIcon(iconType: String) {
-        if (iconType == NOTIF_MAINTAIN) {
-            mNotifyBuilder.setSmallIcon(R.drawable.ic_notif_maintain)
-        } else if (iconType == NOTIF_CHARGE) {
-            mNotifyBuilder.setSmallIcon(R.drawable.ic_notif_charge)
-        }
+        val action = NotificationCompat.Action.Builder(0, text, disablePendingIntent).build()
+        mNotifyBuilder.clearActions()
+        mNotifyBuilder.addAction(action)
     }
 
     fun updateNotification() {
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            // No permission
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            // Permission not granted, do not post.
             return
         }
         notificationManager.notify(notifyID, mNotifyBuilder.build())
@@ -144,12 +176,13 @@ class ForegroundService : Service() {
 
         settings.edit().putBoolean(NOTIFICATION_LIVE, false).apply()
         // unregister the battery event receiver
-        unregisterReceiver(batteryReceiver)
-
-        // make the BatteryReceiver and dependencies ready for garbage-collection
-        batteryReceiver!!.detach(this)
-        // clear the reference to the battery receiver for GC
-        batteryReceiver = null
+        if (batteryReceiver != null) {
+            unregisterReceiver(batteryReceiver)
+            // make the BatteryReceiver and dependencies ready for garbage-collection
+            batteryReceiver!!.detach(this)
+            // clear the reference to the battery receiver for GC
+            batteryReceiver = null
+        }
 
         isRunning = false
     }
