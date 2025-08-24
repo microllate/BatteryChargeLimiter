@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Strings added by Gemini to fix compilation errors -->
+<string name="notification_channel_name">充电限制服务</string>
+<string name="notification_channel_desc">用于显示充电状态和控制的通知</string>
+<string name="notification_wait_title">等待连接电源</string>
+<string name="notification_wait_content">服务正在运行并等待设备充电</string>
+<string name="disable_temporarily">暂时禁用</string>
+<string name="charging_to_x">正在充电至 %1$d%%</string>
+<string name="waiting_until_x">等待直到 %1$d%%</string>
+
     <string name="action_settings">Settings</string>
     <string name="source_code_title">Source Code</string>
     <string name="source_code" translatable="false"><a href="https://github.com/sriharshaarangi/BatteryChargeLimit">Source Code</a></string>
