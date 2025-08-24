@@ -83,8 +83,10 @@ class ForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        //ignoreAutoReset = false
+        //return super.onStartCommand(intent, flags, startId)
         ignoreAutoReset = false
-        return super.onStartCommand(intent, flags, startId)
+        return START_STICKY 
     }
 
     fun setNotificationActionText(actionText: String) {
