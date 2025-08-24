@@ -11,12 +11,14 @@ import android.view.MenuItem
 import android.view.View
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.topjohnwu.superuser.Shell
 import io.github.muntashirakon.bcl.BuildConfig
 import io.github.muntashirakon.bcl.Constants.SETTINGS_VERSION
+import io.github.muntashirakon.bcl.ForegroundService
 import io.github.muntashirakon.bcl.R
 import io.github.muntashirakon.bcl.Utils
 import io.github.muntashirakon.bcl.settings.CtrlFileHelper
@@ -46,6 +48,17 @@ class MainActivity : AppCompatActivity() {
         updateSettingsVersion()
         checkForControlFiles()
         whitelistIfFirstStart()
+
+        // 核心改动：如果用户在设置中启用了“强制充电限制”
+        // 那么在应用启动时，就主动启动前台服务。
+        // This ensures the service is running and can handle events reliably,
+        // without depending on unreliable broadcast receivers.
+        if (Utils.getSettings(this).getBoolean(PrefsFragment.KEY_ENFORCE_CHARGE_LIMIT, false)) {
+            Log.d("MainActivity", "Enforce charge limit is enabled, starting foreground service.")
+            val serviceIntent = Intent(this, ForegroundService::class.java)
+            ContextCompat.startForegroundService(this, serviceIntent)
+        }
+
         // Load main fragment
         supportFragmentManager.beginTransaction()
             .replace(R.id.fragment_container, MainFragment())
