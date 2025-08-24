@@ -1,59 +1,36 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 package io.github.muntashirakon.bcl.receivers
 
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
-import io.github.muntashirakon.bcl.Constants.POWER_CHANGE_TOLERANCE_MS
-import io.github.muntashirakon.bcl.ForegroundService
+import android.widget.Toast
+import com.topjohnwu.superuser.Shell
+import io.github.muntashirakon.bcl.Constants
+import io.github.muntashirakon.bcl.R
 import io.github.muntashirakon.bcl.Utils
-import io.github.muntashirakon.bcl.settings.PrefsFragment
 
-/**
- * Created by harsha on 30/1/17.
- *
- * This BroadcastReceiver handles the change of the power supply state.
- * Because control files like charging_enabled are causing fake events, there is a time window POWER_CHANGE_TOLERANCE_MS
- * milliseconds where the respective "changes" of the power supply will be ignored.
- *
- * 21/4/17 milux: Changed to avoid service (re)start because of fake power on event
- */
-
-class PowerConnectionReceiver : BroadcastReceiver() {
-    private val tag: String = PowerConnectionReceiver::class.java.simpleName
-
-    override fun onReceive(context: Context, intent: Intent) {
-        val action = intent.action
-        Log.d(tag, "Received action: $action")
-
-        Utils.setVoltageThreshold(null, true, context, null)
-
-        // Ignore new events after power change or during state fixing
-        // 在电源状态变化后或状态修复期间，忽略新的事件
-        if (!Utils.getPrefs(context).getBoolean(PrefsFragment.KEY_IMMEDIATE_POWER_INTENT_HANDLING, false)
-            && Utils.isChangePending((BatteryReceiver.backOffTime * 2).coerceAtLeast(POWER_CHANGE_TOLERANCE_MS))
-        ) {
-            if (action == Intent.ACTION_POWER_CONNECTED) {
-                // Ignore connected event only if service is running
-                // 仅当服务正在运行时，忽略连接事件
-                if (ForegroundService.isRunning
-                    || Utils.getPrefs(context).getBoolean(PrefsFragment.KEY_DISABLE_AUTO_RECHARGE, false)
-                ) {
-                    Log.d(tag, "ACTION_POWER_CONNECTED ignored")
-                    return
-                }
-            } else if (action == Intent.ACTION_POWER_DISCONNECTED) {
-                Log.d(tag, "ACTION_POWER_DISCONNECTED ignored")
-                return
-            }
-        }
-
-        if (action == Intent.ACTION_POWER_CONNECTED) {
-            Log.d(tag, "ACTION_POWER_CONNECTED")
-            Utils.startServiceIfLimitEnabled(context)
-        } else if (action == Intent.ACTION_POWER_DISCONNECTED) {
-            Log.d(tag, "ACTION_POWER_DISCONNECTED")
+class ControlBatteryChargeReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+        if (context == null || intent == null) return
+        if (Constants.INTENT_CHANGE_LIMIT_ACTION == intent.action) {
+            Utils.handleLimitChange(context, intent.extras?.get(Intent.EXTRA_TEXT))
+        } else if (intent.action == Constants.INTENT_DISABLE_ACTION) {
             Utils.stopService(context, false)
+        } else if (intent.action == Constants.INTENT_TOGGLE_ACTION) {
+            val settings = Utils.getSettings(context)
+            if (Shell.getShell().isRoot) {
+                val enable = !settings.getBoolean(Constants.CHARGE_LIMIT_ENABLED, false)
+                settings.edit().putBoolean(Constants.CHARGE_LIMIT_ENABLED, enable).apply()
+                if (enable) {
+                    Utils.startServiceIfLimitEnabled(context)
+                } else {
+                    Utils.stopService(context)
+                }
+            } else {
+                Toast.makeText(context, R.string.root_denied, Toast.LENGTH_LONG).show()
+            }
         }
     }
 }
